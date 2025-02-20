@@ -1,9 +1,28 @@
 import { Address, beginCell, Cell, Contract, contractAddress, ContractProvider, Sender, SendMode, toNano } from '@ton/core';
 
-export type TaskConfig = {};
+export const Opcodes = {
+    createTask: 1,
+    completeTask: 2,
+    claimReward: 3
+};
+
+export interface TaskData {
+    creator: Address;
+    task_id: number;
+    maxParticipants: number;
+    totalReward: bigint;
+    rewardPerParticipant: bigint;
+    description: Cell;
+    isActive: boolean;
+    currentParticipants: number;
+}
+
+export interface TaskConfig {
+    // Initial empty config for a new contract
+}
 
 export function taskConfigToCell(config: TaskConfig): Cell {
-    return beginCell().endCell();
+    return beginCell().storeUint(0, 32).storeDict(null).storeDict(null).endCell();
 }
 
 export class Task implements Contract {
@@ -33,21 +52,24 @@ export class Task implements Contract {
         opts: {
             maxParticipants: number;
             description: string;
-            reward: bigint;
+            rewardAmount: bigint;
+            queryID?: number;
         }
-    ) {
+    ): Promise<number> {
+        const currentCounter = await this.getTaskCounter(provider);
         const descriptionCell = beginCell().storeStringTail(opts.description).endCell();
         
         await provider.internal(via, {
-            value: opts.reward,
+            value: opts.rewardAmount + toNano('0.1'), // Add extra for gas
             sendMode: SendMode.PAY_GAS_SEPARATELY,
             body: beginCell()
-                .storeUint(1, 32) // op::create_task
+                .storeUint(Opcodes.createTask, 32)
                 .storeUint(opts.maxParticipants, 32)
-                .storeCoins(opts.reward)
                 .storeRef(descriptionCell)
                 .endCell(),
         });
+        
+        return currentCounter + 1;
     }
 
     async sendCompleteTask(
@@ -57,60 +79,66 @@ export class Task implements Contract {
             taskId: number;
             participantAddress: Address;
         }
-    ) {
+    ): Promise<void> {
         await provider.internal(via, {
-            value: toNano('0.5'),
+            value: toNano('0.1'),
             sendMode: SendMode.PAY_GAS_SEPARATELY,
             body: beginCell()
-                .storeUint(2, 32) // op::complete_task
+                .storeUint(Opcodes.completeTask, 32)
                 .storeUint(opts.taskId, 32)
                 .storeAddress(opts.participantAddress)
                 .endCell(),
         });
     }
-
     async sendClaimReward(
         provider: ContractProvider,
         via: Sender,
         opts: {
             taskId: number;
         }
-    ) {
+    ): Promise<void> {
         await provider.internal(via, {
-            value: toNano('0.3'),
+            value: toNano('0.1'),
             sendMode: SendMode.PAY_GAS_SEPARATELY,
             body: beginCell()
-                .storeUint(3, 32) // op::claim_reward
+                .storeUint(Opcodes.claimReward, 32)
                 .storeUint(opts.taskId, 32)
                 .endCell(),
         });
     }
 
-    async getTask(provider: ContractProvider, taskId: number) {
+    async getTaskCounter(provider: ContractProvider): Promise<number> {
+        const { stack } = await provider.get('get_task_counter', []);
+        return stack.readNumber();
+    }
+
+    async getTask(provider: ContractProvider, taskId: number): Promise<TaskData> {
         const result = await provider.get('get_task', [
             { type: 'int', value: BigInt(taskId) }
         ]);
         const stack = result.stack;
         return {
             creator: stack.readAddress(),
+            task_id: stack.readNumber(),
             maxParticipants: stack.readNumber(),
-            reward: stack.readBigNumber(),
+            totalReward: stack.readBigNumber(),
+            rewardPerParticipant: stack.readBigNumber(),
             description: stack.readCell(),
-            isActive: stack.readNumber() === 1,
+            isActive: stack.readBoolean(),
             currentParticipants: stack.readNumber()
         };
     }
 
-    async getAvailableTasks(provider: ContractProvider) {
+    async getAvailableTasks(provider: ContractProvider): Promise<Cell> {
         const result = await provider.get('get_available_tasks', []);
         return result.stack.readCell();
     }
 
-    async hasCompletedTask(provider: ContractProvider, address: Address, taskId: number) {
+    async hasCompletedTask(provider: ContractProvider, address: Address, taskId: number): Promise<boolean> {
         const result = await provider.get('has_completed_task', [
             { type: 'slice', cell: beginCell().storeAddress(address).endCell() },
             { type: 'int', value: BigInt(taskId) }
         ]);
-        return result.stack.readNumber() === 1;
+        return result.stack.readBoolean();
     }
 }

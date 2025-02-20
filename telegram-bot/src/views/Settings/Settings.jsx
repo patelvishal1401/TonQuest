@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { User, Wallet, ArrowDownToLine } from "lucide-react";
 import { useSelector } from "react-redux";
 import { profileState } from "../../store/profileSlice";
-import { formatWalletAddress } from "../../utils/helper";
+import { contractInit, formatWalletAddress } from "../../utils/helper";
 import { useTonConnectUI } from "@tonconnect/ui-react";
 import { MdContentCopy } from "react-icons/md";
 import { LuCopyCheck } from "react-icons/lu";
@@ -13,6 +13,8 @@ import { envObj } from "../../constants/env";
 import { getUser, updateUser } from "../../services/supabase/query";
 import { transferTON } from "../../utils/wallet";
 import { BtnLoader } from "../../components/Loader";
+import { useTonConnect } from "../../hooks/useTonConnect";
+import ViewTasks from "./CompletedTask";
 
 
 const Settings = () => {
@@ -22,6 +24,7 @@ const Settings = () => {
   const [isCopied, setIsCopied] = useState(false); // State to manage copy icon toggle
   const [rewards, setRewards] = useState(0)
   const [loading, setLoading] = useState(false);
+  const { sender } = useTonConnect();
 
 
   useEffect(() => {
@@ -64,30 +67,35 @@ const Settings = () => {
   
 
 
-  const handleWithdraw = async() => {
-    setLoading(true);
-      const conversionRate = 1000;
-      const value = rewards / conversionRate;
-      const transferResponse = await transferTON({
-        address: tonConnectUi.account.address,
-        value,
-      });
+  const handleWithdraw = async () => {
+    
+    const contract = contractInit();
+    const claim=contract.sendClaimReward(sender,{taskId:1})
 
-    if (!transferResponse) {
-    setLoading(false);
-      return
-    };
+
+    // setLoading(true);
+    //   const conversionRate = 1000;
+    //   const value = rewards / conversionRate;
+    //   const transferResponse = await transferTON({
+    //     address: tonConnectUi.account.address,
+    //     value,
+    //   });
+
+    // if (!transferResponse) {
+    // setLoading(false);
+    //   return
+    // };
     
       
-    const updateResponse = await updateUser({ data: { rewards: 0 }, userId: profile?.userId });
-    if (updateResponse.error)
-    {
-    setLoading(false);
+    // const updateResponse = await updateUser({ data: { rewards: 0 }, userId: profile?.userId });
+    // if (updateResponse.error)
+    // {
+    // setLoading(false);
       
-      return
-    }
+    //   return
+    // }
 
-      setRewards(updateResponse?.data?.[0]?.rewards)
+    //   setRewards(updateResponse?.data?.[0]?.rewards)
       
     
 
@@ -95,7 +103,7 @@ const Settings = () => {
 
 
 
-    setLoading(false);
+    // setLoading(false);
   };
 
   const handleCopy = () => {
@@ -165,14 +173,15 @@ const Settings = () => {
         <div className='p-6 bg-white border rounded-lg border-neutral-200'>
           <div className='flex flex-col items-center space-y-4 text-center'>
             <h3 className='font-medium'>Available Rewards</h3>
-            <p className='text-3xl font-bold text-purple-600'>{rewards}</p>
+            <ViewTasks/>
+            {/* <p className='text-3xl font-bold text-purple-600'>{rewards}</p>
             <button
               onClick={handleWithdraw}
               className='flex items-center justify-center w-full gap-2 px-6 py-2 text-white transition-colors bg-purple-600 rounded-md hover:bg-purple-700'
             >
               <ArrowDownToLine className='w-5 h-5' />
               Withdraw Rewards {loading ? <BtnLoader/>:null}
-            </button>
+            </button> */}
           </div>
         </div>
       </div>

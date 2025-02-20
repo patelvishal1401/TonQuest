@@ -82,8 +82,10 @@ int addr_to_key(slice address) inline {
     
     ;; Store task data
     cell task_data = begin_cell()
-        .store_slice(creator_address)    
+        .store_slice(creator_address) 
+        .store_uint(task_id, 32)   
         .store_uint(max_participants, 32)
+        .store_coins(reward_amount)     ;; Store total reward amount
         .store_coins(reward_per_participant) ;; Store reward per participant
         .store_ref(description)          
         .store_uint(1, 1)                ;; is_active
@@ -110,14 +112,18 @@ int addr_to_key(slice address) inline {
     ;; Verify sender is task creator
     throw_unless(error::not_creator, slice_equal?(creator_address, sender_address));
     
+    int task_id_from_cell = task_slice~load_uint(32);
     int max_participants = task_slice~load_uint(32);
+    int total_reward = task_slice~load_coins();
     int reward_per_participant = task_slice~load_coins();
     cell description = task_slice~load_ref();
     int is_active = task_slice~load_uint(1);
     int current_participants = task_slice~load_uint(32);
     
-    ;; Validate task is active and not full
+    ;; Validate task is active
     throw_unless(error::task_inactive, is_active);
+    
+    ;; Check if task is already full
     throw_if(error::max_participants, current_participants >= max_participants);
     
     ;; Check if participant has already completed this task
@@ -134,13 +140,18 @@ int addr_to_key(slice address) inline {
     ;; Update participant count
     current_participants += 1;
     
+    ;; Update active status - keep active if we haven't reached max participants
+    int should_remain_active = current_participants < max_participants ? 1 : 0;
+    
     ;; Update task data
     cell updated_task = begin_cell()
         .store_slice(creator_address)
+        .store_uint(task_id, 32)
         .store_uint(max_participants, 32)
+        .store_coins(total_reward)
         .store_coins(reward_per_participant)
         .store_ref(description)
-        .store_uint(current_participants < max_participants, 1)
+        .store_uint(should_remain_active, 1)
         .store_uint(current_participants, 32)
         .end_cell();
     
@@ -165,36 +176,38 @@ int addr_to_key(slice address) inline {
 () claim_reward(int task_id, slice sender_addr) impure {
     var (task_counter, tasks, completed_tasks) = load_data();
     
-    ;; Verify task completion
-    int sender_key = addr_to_key(sender_addr);
-    var (participant_cell, found?) = completed_tasks.udict_get_ref?(256, sender_key);
-    throw_unless(error::task_not_found, found?);
-    
-    slice participant_slice = participant_cell.begin_parse();
-    var dict = participant_slice~load_dict();
-    var (status_cell, found_status?) = dict.udict_get_ref?(32, task_id);
-    throw_unless(error::task_inactive, found_status?);
-    
     ;; Load task data and verify reward
     var (task_cell, found?) = tasks.udict_get_ref?(32, task_id);
     throw_unless(error::task_not_found, found?);
     
+    ;; Verify task completion
+    int sender_key = addr_to_key(sender_addr);
+    var (participant_cell, found?) = completed_tasks.udict_get_ref?(256, sender_key);
+    throw_unless(error::task_not_found, found?); ;; Error if participant not found
+    
+    slice participant_slice = participant_cell.begin_parse();
+    var dict = participant_slice~load_dict();
+    var (status_cell, found_status?) = dict.udict_get_ref?(32, task_id);
+    throw_unless(error::task_not_found, found_status?); ;; Error if task completion not found
+    
     slice task_slice = task_cell.begin_parse();
     task_slice~load_msg_addr(); ;; skip creator_address
+    task_slice~load_uint(32);   ;; skip task_id
     task_slice~load_uint(32);   ;; skip max_participants
-    int reward_per_participant = task_slice~load_coins(); ;; Load reward per participant
+    task_slice~load_coins();    ;; skip total reward
+    int reward_per_participant = task_slice~load_coins();
     
     ;; Send reward
     var msg = begin_cell()
         .store_uint(0x18, 6)            ;; nobounce
         .store_slice(sender_addr)
-        .store_coins(reward_per_participant) ;; Send reward per participant
+        .store_coins(reward_per_participant)
         .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
         .end_cell();
     
-    send_raw_message(msg, 1);
+    send_raw_message(msg, 64); ;; Changed mode to 64 (carry all remaining value)
     
-    ;; Remove from completed tasks
+    ;; Remove from completed tasks to prevent claiming twice
     dict~udict_delete?(32, task_id);
     completed_tasks~udict_set_ref(256, sender_key, 
         begin_cell().store_dict(dict).end_cell()
@@ -205,7 +218,7 @@ int addr_to_key(slice address) inline {
 
 ;; Get methods
 
-(slice, int, int, cell, int, int) get_task(int task_id) method_id {
+(slice, int, int, int, int, cell, int, int) get_task(int task_id) method_id {
     var (_, tasks, _) = load_data();
     var (task_cell, found?) = tasks.udict_get_ref?(32, task_id);
     throw_unless(error::task_not_found, found?);
@@ -213,7 +226,9 @@ int addr_to_key(slice address) inline {
     slice task_slice = task_cell.begin_parse();
     return (
         task_slice~load_msg_addr(),      ;; creator_address
+        task_slice~load_uint(32),        ;; task_id
         task_slice~load_uint(32),        ;; max_participants
+        task_slice~load_coins(),         ;; total_reward
         task_slice~load_coins(),         ;; reward_per_participant
         task_slice~load_ref(),           ;; description
         task_slice~load_uint(1),         ;; is_active
@@ -224,6 +239,11 @@ int addr_to_key(slice address) inline {
 cell get_available_tasks() method_id {
     var (_, tasks, _) = load_data();
     return tasks;
+}
+
+int get_task_counter() method_id {
+    var (task_counter, _, _) = load_data();
+    return task_counter;
 }
 
 int has_completed_task(slice address, int task_id) method_id {
@@ -257,7 +277,7 @@ int has_completed_task(slice address, int task_id) method_id {
     
     if (op == op::create_task) {
         int max_participants = in_msg_body~load_uint(32);
-        int reward_amount = in_msg_body~load_coins();
+        int reward_amount = msg_value; 
         cell description = in_msg_body~load_ref();
         create_task(sender_addr, max_participants, reward_amount, description);
         return ();

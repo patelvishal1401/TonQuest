@@ -1,4 +1,8 @@
+import { Address, TonClient } from "@ton/ton";
+import { envObj } from "../constants/env";
 import { addUser, getUser } from "../services/supabase/query";
+import TaskContract from "./task";
+import { Task } from "./contract.ts";
 import { Buffer } from "buffer";
 
 window.Buffer = Buffer;
@@ -34,4 +38,21 @@ const login = async () => {
 const formatWalletAddress = (address) =>
     address?.substring(0, 5) + "...." + address?.substring(address.length - 5);
 
-export { login, telegram, formatWalletAddress }
+
+ const tonClient = new TonClient({
+      endpoint: "https://testnet.toncenter.com/api/v2/jsonRPC",
+      apiKey: envObj.tonApiKey,
+  });
+    
+
+const contractInit = (address) => {
+    // const task = new Task(
+    //   "kQAFOz3tB-K_UQE2TT-idSkknErErzvdcLg9h9NPC7cxRp1K"
+    // );
+
+    const task = Task.createFromAddress(Address.parse("kQBdZkyCZmLfLK1kaHNbfH1HAZ7U_AahXpt2nXuJDvkMr8Nb"));
+
+    return tonClient.open(task);
+  }
+
+export { login, telegram, formatWalletAddress ,tonClient, contractInit}

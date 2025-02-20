@@ -8,8 +8,11 @@ import { useSelector } from "react-redux";
 import { profileState } from "./store/profileSlice";
 import { routes } from "./constants/routes";
 import { useTonConnectUI } from "@tonconnect/ui-react";
+import { Buffer } from "buffer";
+
 
 function App() {
+  window.Buffer = Buffer;
 
   return (
     <Routes>
